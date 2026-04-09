@@ -29,3 +29,13 @@ Du skal få:
 `{"status":"ok"}`
 Merk
 Denne versjonen bruker skjermdump av den offentlige Norge i bilder-løsningen for å vise flyfoto uten egen bildeleverandør.
+STT webhook-backend v2.4 Kartverket crop
+Forbedret screenshot-løsning for Norge i bilder.
+Endringer
+prøver å lukke popup/dialoger
+skjuler sidepaneler/overlays før screenshot
+venter lenger på at kartet skal laste
+croppper bare kartområdet i stedet for hele appen
+fallback crop hvis kartselektor ikke kan leses
+Bruk
+Bytt ut backend-koden i repoet ditt med denne versjonen og redeploy i Render.
