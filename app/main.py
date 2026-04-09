@@ -9,7 +9,7 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="STT Roof Calc Webhook", version="2.3.0")
+app = FastAPI(title="STT Roof Calc Webhook", version="2.4.0")
 
 RoofMaterial = Literal["tiles", "sheet", "papp", "turf", "unknown"]
 
@@ -28,7 +28,8 @@ NIB_OPEN_URL_TEMPLATE = os.getenv(
 DEFAULT_ZOOM = int(os.getenv("STT_AERIAL_ZOOM", "19"))
 DEFAULT_WIDTH = int(os.getenv("STT_AERIAL_WIDTH", "1200"))
 DEFAULT_HEIGHT = int(os.getenv("STT_AERIAL_HEIGHT", "800"))
-SCREENSHOT_TIMEOUT_MS = int(os.getenv("STT_SCREENSHOT_TIMEOUT_MS", "15000"))
+SCREENSHOT_TIMEOUT_MS = int(os.getenv("STT_SCREENSHOT_TIMEOUT_MS", "25000"))
+SCREENSHOT_SETTLE_MS = int(os.getenv("STT_SCREENSHOT_SETTLE_MS", "3500"))
 
 
 class QuoteRequest(BaseModel):
@@ -253,23 +254,101 @@ def nib_screenshot(
     width: int = Query(DEFAULT_WIDTH),
     height: int = Query(DEFAULT_HEIGHT),
 ):
-    # This endpoint expects Playwright to be installed in the runtime image.
-    # It opens the public Norge i bilder page and returns a screenshot as image/jpeg.
-    # It is a workaround when there is no image provider/token-backed WMTS access.
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Playwright is not installed: {exc}")
 
     url = apply_template(NIB_OPEN_URL_TEMPLATE, lat, lon, "")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": width, "height": height})
-        page.goto(url, wait_until="networkidle", timeout=SCREENSHOT_TIMEOUT_MS)
-        page.screenshot(path="/tmp/nib.jpg", type="jpeg", quality=85)
-        browser.close()
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--disable-dev-shm-usage"])
+            page = browser.new_page(viewport={"width": width, "height": height, "device_scale_factor": 1})
+            page.goto(url, wait_until="domcontentloaded", timeout=SCREENSHOT_TIMEOUT_MS)
+            page.wait_for_timeout(1800)
+            page.evaluate("""
+                () => {
+                  const clickSelectors = [
+                    '[aria-label="Close"]',
+                    '[aria-label="Lukk"]',
+                    'button[title="Close"]',
+                    'button[title="Lukk"]',
+                    '.modal button',
+                    '.popup button',
+                    '.ui-dialog-titlebar-close',
+                    '[role="dialog"] button',
+                    '[class*="close"]',
+                    '[id*="close"]'
+                  ];
+                  for (const sel of clickSelectors) {
+                    for (const el of document.querySelectorAll(sel)) {
+                      const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+                      if (txt.includes('lukk') || txt.includes('close') || txt === '×' || txt === 'x' || txt === '') {
+                        try { el.click(); } catch (e) {}
+                      }
+                    }
+                  }
 
-    data = open("/tmp/nib.jpg", "rb").read()
+                  const hideSelectors = [
+                    '[role="dialog"]',
+                    '.modal',
+                    '.popup',
+                    '.ui-dialog',
+                    '.toast',
+                    '.cookie',
+                    '.sidebar',
+                    '.side-panel',
+                    '.right-panel',
+                    '.left-panel',
+                    '[class*="sidebar"]',
+                    '[class*="panel"]'
+                  ];
+                  for (const sel of hideSelectors) {
+                    for (const el of document.querySelectorAll(sel)) {
+                      const style = window.getComputedStyle(el);
+                      if (style.position === 'fixed' || style.position === 'absolute' || el.getAttribute('role') === 'dialog') {
+                        el.style.display = 'none';
+                      }
+                    }
+                  }
+                }
+            """)
+            page.wait_for_timeout(SCREENSHOT_SETTLE_MS)
+
+            clip = None
+            box = None
+            selectors = ['#map', '.leaflet-container', '.ol-viewport', 'canvas']
+            for sel in selectors:
+                try:
+                    locator = page.locator(sel).first
+                    if locator.count() > 0:
+                        box = locator.bounding_box()
+                        if box and box["width"] > 300 and box["height"] > 300:
+                            break
+                except Exception:
+                    box = None
+
+            if box and box["width"] > 300 and box["height"] > 300:
+                clip = {
+                    "x": max(0, box["x"] + box["width"] * 0.05),
+                    "y": max(0, box["y"] + box["height"] * 0.12),
+                    "width": max(300, box["width"] * 0.72),
+                    "height": max(300, box["height"] * 0.72),
+                }
+            else:
+                clip = {
+                    "x": max(0, width * 0.16),
+                    "y": max(0, height * 0.12),
+                    "width": max(300, width * 0.60),
+                    "height": max(300, height * 0.68),
+                }
+
+            page.screenshot(path="/tmp/nib-crop.jpg", type="jpeg", quality=88, clip=clip)
+            browser.close()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Screenshot feilet: {exc}")
+
+    data = open("/tmp/nib-crop.jpg", "rb").read()
     return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=300"})
 
 
@@ -292,7 +371,7 @@ def roof_calc(
         open_url = apply_template(NIB_OPEN_URL_TEMPLATE, resolved["lat"], resolved["lon"], resolved["resolved_address"])
         if AERIAL_PROVIDER == "kartverket_nib_screenshot" and base_url:
             image_url = f"{base_url.rstrip('/')}/nib-screenshot?lat={resolved['lat']}&lon={resolved['lon']}&zoom={DEFAULT_ZOOM}&width={DEFAULT_WIDTH}&height={DEFAULT_HEIGHT}"
-            note = "Adresse er slått opp via Kartverket. Flyfoto vises via skjermdump av den offentlige Norge i bilder-løsningen."
+            note = "Adresse er slått opp via Kartverket. Flyfoto hentes via forbedret Norge i bilder-crop."
         else:
             image_url = generate_demo_map_svg(resolved["resolved_address"])
             note = "Adresse er slått opp via Kartverket. Åpne lenken til Norge i bilder for ekte ortofoto."
