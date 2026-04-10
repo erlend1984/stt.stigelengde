@@ -39,3 +39,13 @@ croppper bare kartområdet i stedet for hele appen
 fallback crop hvis kartselektor ikke kan leses
 Bruk
 Bytt ut backend-koden i repoet ditt med denne versjonen og redeploy i Render.
+STT Backend v1
+Render-ready backend for STT Roof Ladder Quote v1.0.
+Endpoints:
+GET /health
+POST /roof-calc
+Notes:
+preview returns resolved address, postcode and a pluggable map image URL
+quote returns ladder calculations for one or more ladders
+ladder is always calculated to ridge
+pipe point is used for platform need and chimney back height estimate
