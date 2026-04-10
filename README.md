@@ -49,3 +49,16 @@ preview returns resolved address, postcode and a pluggable map image URL
 quote returns ladder calculations for one or more ladders
 ladder is always calculated to ridge
 pipe point is used for platform need and chimney back height estimate
+STT Backend v1.1.0
+Denne versjonen bruker ekte ortofoto-fliser i stedet for demo-skisse.
+Endringer
+preview returnerer nå `/ortho-image`
+`/ortho-image` bygger et ekte bilde fra Kartverket ortofoto-fliser
+ingen screenshot-løsning
+lettere og mer stabil drift på Render
+Deploy
+Bytt ut disse filene i GitHub-repoet for backend:
+app/main.py
+requirements.txt
+Dockerfile
+.env.example
